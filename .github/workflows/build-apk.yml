@@ -1,1 +1,94 @@
+name: Build ArUco Scanner APK
 
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "ArucoScanner_CloudBuild_v*.zip"
+      - ".github/workflows/build-apk.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-debug-apk:
+    name: Build latest debug APK - API 36
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Ambil isi repository
+        uses: actions/checkout@v4
+
+      - name: Pasang Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Pasang Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Pasang Android API 36
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Pasang Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Pilih source versi terbaru
+        shell: bash
+        run: |
+          SOURCE_ZIP="$(find . -maxdepth 1 -type f -name 'ArucoScanner_CloudBuild_v*.zip' -printf '%f\n' | sort -V | tail -n 1)"
+          test -n "$SOURCE_ZIP"
+
+          PROJECT_DIR="${SOURCE_ZIP%.zip}"
+          APP_VERSION="${PROJECT_DIR#ArucoScanner_CloudBuild_}"
+
+          echo "SOURCE_ZIP=$SOURCE_ZIP" >> "$GITHUB_ENV"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          echo "Menggunakan $SOURCE_ZIP"
+
+      - name: Periksa dan ekstrak source
+        shell: bash
+        run: |
+          unzip -t "$SOURCE_ZIP"
+          unzip -q -o "$SOURCE_ZIP"
+          test -f "$PROJECT_DIR/settings.gradle.kts"
+          test -f "$PROJECT_DIR/app/build.gradle.kts"
+          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
+
+      - name: Verifikasi konfigurasi Android
+        shell: bash
+        run: |
+          grep -n "compileSdk = 36" "$PROJECT_DIR/app/build.gradle.kts"
+          grep -n "targetSdk = 36" "$PROJECT_DIR/app/build.gradle.kts"
+
+      - name: Build APK debug
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Siapkan APK
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" \
+             "dist/ArucoScanner-${APP_VERSION}-debug.apk"
+          sha256sum "dist/ArucoScanner-${APP_VERSION}-debug.apk" \
+             > "dist/ArucoScanner-${APP_VERSION}-debug.apk.sha256"
+          ls -lh dist/*
+
+      - name: Simpan APK sebagai artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ArucoScanner-${{ env.APP_VERSION }}-debug-apk
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
